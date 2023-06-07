@@ -1,0 +1,1 @@
+# npi_vegetation_statellite_task
