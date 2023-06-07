@@ -2,8 +2,8 @@
 # Aim: Calculating NDVI metrics from Sentinel 2 imagery
 # Program: R
 # Revised script from MSc thesis
-Author: Lia Lechler
-Start: 05/06/2023
+# Author: Lia Lechler
+# Start: 05/06/2023
 
 # SET UP WORKSPACE
 library(dplyr)
