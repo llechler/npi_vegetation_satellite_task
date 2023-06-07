@@ -1,0 +1,92 @@
+# EXAMPLE SCRIPT FOR CALCULATING NDVI METRICS IN R
+# Aim: Calculating NDVI metrics from Sentinel 2 imagery
+# Program: R
+# Revised script from MSc thesis
+Author: Lia Lechler
+Start: 05/06/2023
+
+# SET UP WORKSPACE
+library(dplyr)
+library(mgcv)
+library(lme4)
+
+# Sample NDVI data and dates across a virtual growing season in 2022
+ndvi_values <- c(0.2, 0.3, 0.5, 0.7, 0.9, 1.0, 0.8, 0.6, 0.4, 0.2, 0.1) # Would have 1-2 values per day without cloud cleaning
+dates <- as.Date(c("2022-05-01", "2022-05-15", "2022-06-01", "2022-06-15", "2022-07-01",
+                   "2022-07-15", "2022-08-01", "2022-08-15", "2022-09-01", "2022-09-15", "2022-10-01"))
+
+# Create a data frame with dates and NDVI values
+data <- data.frame(date = dates, ndvi = ndvi_values)
+
+
+# DATA CLEANING
+# Remove implausible NDVI values
+filtered_data <- data %>%
+  filter(ndvi >= 0 & ndvi <= 1) # this can be changed according to specifications, I often had negative ndvi values from sentinel 2 imagery
+
+
+# WRITE MODELS FOR NDVI METRICS
+# Fit a GAM to the filtered data
+gam_model <- gam(ndvi ~ s(date), data = filtered_data) # with each ndvi values, the model is newly informed and the spline of the curve adjusted
+# This is an example for one location, for many locations I have written a loop iterating through the years and locations
+
+# Calculate the peak NDVI, timing of peak NDVI, and cumulative NDVI
+peak_ndvi <- max(gam_model$fitted.values)
+
+timing_peak_ndvi <- filtered_data %>%
+  filter(ndvi == peak_ndvi) %>%
+  pull(date)
+
+# Define SoS and EoS according to research preferences (snowmelt date, temperature or daylight hours),
+# but could also be specific ndvi treshold, or different treshold for each region
+cumulative_ndvi_start_to_peak <- filtered_data %>%
+  filter(date <= timing_peak_ndvi) %>%
+  summarise(cumulative_ndvi = sum(gam_model$fitted.values[date <= timing_peak_ndvi]))
+
+cumulative_ndvi_peak_to_end <- filtered_data %>%
+  filter(date >= timing_peak_ndvi) %>%
+  summarise(cumulative_ndvi = sum(gam_model$fitted.values[date >= timing_peak_ndvi]))
+
+# Print the results
+print(paste("Peak NDVI:", peak_ndvi))
+print(paste("Timing of Peak NDVI:", timing_peak_ndvi))
+print(paste("Cumulative NDVI from Start to Peak:", cumulative_ndvi_start_to_peak$cumulative_ndvi))
+print(paste("Cumulative NDVI from Peak to End:", cumulative_ndvi_peak_to_end$cumulative_ndvi))
+
+
+# EXPORT NDVI METRICS
+# Create a data frame with the NDVI metrics
+ndvi_metrics <- data.frame(
+  Peak_NDVI = peak_ndvi,
+  Timing_Peak_NDVI = timing_peak_ndvi,
+  Cumulative_NDVI_Start_to_Peak = cumulative_ndvi_start_to_peak$cumulative_ndvi,
+  Cumulative_NDVI_Peak_to_End = cumulative_ndvi_peak_to_end$cumulative_ndvi
+)
+
+# Define the output file path
+output_file <- "ndvi_metrics.csv"
+
+# Write the NDVI metrics to a CSV file
+write.csv(ndvi_metrics, file = output_file, row.names = FALSE)
+
+
+# ADDITION: CAUSE OF NDVI METRICS
+# Potential to perform models to determine the reason for differing growing season characteristics across Svalbard
+# I have used ground ice presence as predictor variable for mixed effect modelling of peak ndvi
+lme_ndvi_max_ice <- lme4:: lmer(filtered_data[["peak_ndvi"]]  ~ ice_presence + (1|year) + (1|location), 
+                    data = filtered_data)
+
+# Plot residuals
+qqnorm(resid(lme_ndvi_max_ice))
+qqline(resid(lme_ndvi_max_ice))
+
+# Look at model summary
+summary(lme_ndvi_max_ice)
+
+# Obtain confidence intervals
+confint(lme_ndvi_max_ice)
+
+# Extract effect sizes
+emmeans(lme_ndvi_max_ice, c("ice_presence")) %>% as.data.frame()
+contrast(emmeans(lme_ndvi_max_ice, c("ice_presence")), adjust = "none", method = "trt.vs.ctrl")
+lsmeans(lme_ndvi_max_ice, pairwise ~ ice_presence, adjust = "tukey")
