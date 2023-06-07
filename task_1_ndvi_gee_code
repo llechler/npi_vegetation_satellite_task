@@ -1,0 +1,93 @@
+# EXAMPLE SCRIPT FOR OBTAINING NDVI FROM GEE
+# Aim: Obtaining NDVI values from Sentinel 2 imagery for an example location in Svalbard
+# Program: Google Earth Engine
+# Revised script from MSc thesis
+# Author: Lia Lechler
+# Start: 05/06/2023
+
+// DEFINE LOCATION, TIME AND SATELLITE
+// Initialize Google Earth Engine
+var ee = require('users/lialechler/ndvi_svalbard_2022:ee');
+
+// Define the location of interest (Adventdalen, Svalbard)
+var pointOfInterest = ee.Geometry.Point(15.872929, 78.199925);
+
+// Define the time range for the vegetation growing season
+var startDate = '2022-05-01';
+var endDate = '2022-10-01';
+
+// Load Sentinel-2 collection and filter by date and location
+var collection = ee.ImageCollection('COPERNICUS/S2')
+  .filterBounds(pointOfInterest)
+  .filterDate(startDate, endDate);
+
+
+// FILTER CLOUDS
+// Function to apply cloud masking algorithm
+var maskClouds = function(image, threshold) {
+  var quality = image.select('QA60'); //mask clouds using the Sentinel-2 QA band (cloud presence and image artefacts)
+  var cloudProbability = quality.bitwiseAnd(1 << 10).neq(0)
+    .or(quality.bitwiseAnd(1 << 11).neq(0)); //clouds and cirrus clouds, set to one: obtain binary mask where 1 represents cloudy pixels and 0 represents non-cloudy pixels
+  var cloudMask = cloudProbability.lt(threshold); //check if the cloud probability values are less than the set threshold
+  return image.updateMask(cloudMask); //mask out pixels with cloud probabilities above the specified threshold
+};
+
+// Apply cloud masking to the collection with a cloud threshold of 0.2 (20%)
+var maskedCollection = collection.map(function(image) {
+  return maskClouds(image, 0.2);
+});
+
+
+// ASSESS EFFECT OF FILTERING
+// Calculate the number of usable scenes
+var usableScenes = maskedCollection.size();
+
+// Get the acquisition dates of the images
+var acquisitionDates = maskedCollection
+  .aggregate_array('system:time_start');
+
+// Calculate the time differences between consecutive acquisitions
+var timeDifferences = acquisitionDates
+  .reduce(ee.Reducer.zip()
+    .repeat(2)
+    .setOutputs(['previous', 'current']))
+  .map(function(dates) {
+    return ee.Number(dates.get('current'))
+      .subtract(ee.Number(dates.get('previous'))); //creates pairs of consecutive acquisition dates and subtracts the previous date from the current date.
+  });
+
+// Find the maximum time gap without usable imagery
+var maxTimeGap = timeDifferences.reduce(ee.Reducer.max());
+
+// Print the results
+print('Number of Usable Scenes:', usableScenes);
+print('Maximum Time Gap without Usable Imagery (milliseconds):', maxTimeGap);
+
+
+// OBTAIN NDVI IMAGERY
+// Calculate NDVI
+var calculateNDVI = function(image) {
+  var ndvi = image.normalizedDifference(['B8', 'B4']).rename('NDVI');
+  return image.addBands(ndvi);
+};
+
+// Apply NDVI calculation to the masked collection
+var ndviCollection = maskedCollection.map(calculateNDVI);
+
+
+// CONVERT AND EXPORT RESULTS
+// Convert the image collection to a table
+var table = ndviCollection.select('NDVI').toBands().toShort()
+  .reduceRegion({
+    reducer: ee.Reducer.mean(),
+    geometry: pointOfInterest,
+    scale: 10
+  });
+
+// Export the results as a CSV file
+Export.table.toDrive({
+  collection: ee.FeatureCollection([table]),
+  description: 'NDVI_Adventdalen',
+  folder: 'Your_GDrive_Folder',
+  fileFormat: 'CSV'
+});
